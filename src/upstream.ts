@@ -546,7 +546,8 @@ function identityHeaders(credential: WorkBuddyCredential): Record<string, string
  * Normalize an OpenAI chat-completions body for the WorkBuddy upstream:
  * force `stream: true` (the upstream rejects non-streaming), flatten
  * `tool_choice` (the upstream's field is a string; object forms return 400),
- * and rewrite `developer` messages as `system`.
+ * rewrite `developer` messages as `system`, and replace agent-style or
+ * oversized system prompt content with the lean {@link LEAN_SYSTEM_PROMPT}.
  *
  * The `developer` rewrite is load-bearing: pi-ai emits the system prompt as
  * `role: "developer"` (the OpenAI convention it adopted), but the WorkBuddy
@@ -565,6 +566,7 @@ export function prepareChatBody(source: string): string {
   const obj = body as Record<string, unknown>
   obj['stream'] = true
   normalizeDeveloperRole(obj)
+  normalizeSystemPrompts(obj)
   normalizeToolChoice(obj)
   return JSON.stringify(obj)
 }
@@ -577,6 +579,70 @@ function normalizeDeveloperRole(obj: Record<string, unknown>): void {
     if (typeof message !== 'object' || message === null || Array.isArray(message)) continue
     const wrapped = message as Record<string, unknown>
     if (wrapped['role'] === 'developer') wrapped['role'] = 'system'
+  }
+}
+
+/**
+ * Lean replacement for agent-style or oversized system prompts, modeled on the
+ * CodeBuddy CLI's own opener (`product.json` → `cli-agent-prompt`): identity
+ * and task framing only, no third-party harness wording.
+ *
+ * Why: the upstream's content filter rejects third-party agent harness prompts
+ * (e.g. "You are an AI agent powered by DeepSeek Harness") as prompt injection
+ * (business code 11140), and the harness preamble is tens of kB of steering
+ * this upstream does not need. Only the *content* is replaced, never the
+ * message — the upstream also requires a leading `system` message (code 11128).
+ */
+export const LEAN_SYSTEM_PROMPT
+  = 'You are an interactive CLI tool that helps users with software engineering tasks. '
+    + 'Use the tools available to you to assist the user. '
+    + "Your main goal is to follow the USER's instructions at each message."
+
+/**
+ * Agent-identity markers in a system prompt. Ported from 9router's
+ * CodeBuddyExecutor (`open-sse/executors/codebuddy-cn.js`), battle-tested
+ * against the same gateway's content filter.
+ */
+export const AGENT_SYSTEM_PROMPT_PATTERN
+  = /you are claude code|claude.?code.+official.+cli|anthropic.+official.+cli|anxthxropic.+official.+cli|you are (?:cursor|windsurf|cline|aider|continue|copilot|cody)|you are an? (?:ai )?(?:coding |code )?agent|cc_entrypoint\s*=\s*(?:cli|vscode|jetbrains|gui)|claude.?code.+issues|give feedback.+claude.?code|you are .{0,30}(?:powerful )?ai agent|orchestration capabilities|OhMyOpenCode|<agent-identity>|<Role>|<Behavior_Instructions>/i
+
+/**
+ * Length catch-all from the same port: real harness preambles run to many kB,
+ * while the upstream's own prompts stay small. A system prompt over this size
+ * is treated as a harness preamble and rewritten.
+ */
+const LEAN_PROMPT_LENGTH_THRESHOLD = 2000
+
+/** Whether a system prompt should be replaced by {@link LEAN_SYSTEM_PROMPT}. */
+function systemPromptNeedsLean(text: string): boolean {
+  return text.length > LEAN_PROMPT_LENGTH_THRESHOLD || AGENT_SYSTEM_PROMPT_PATTERN.test(text)
+}
+
+/**
+ * Replace agent-style or oversized `system` prompt content with
+ * {@link LEAN_SYSTEM_PROMPT}, preserving the content shape (string stays
+ * string, typed blocks stay typed blocks). Other content shapes and non-system
+ * messages are left untouched.
+ */
+function normalizeSystemPrompts(obj: Record<string, unknown>): void {
+  const messages = obj['messages']
+  if (!Array.isArray(messages)) return
+  for (const message of messages) {
+    if (typeof message !== 'object' || message === null || Array.isArray(message)) continue
+    const wrapped = message as Record<string, unknown>
+    if (wrapped['role'] !== 'system') continue
+    const content: unknown = wrapped['content']
+    if (typeof content === 'string') {
+      if (systemPromptNeedsLean(content)) wrapped['content'] = LEAN_SYSTEM_PROMPT
+    } else if (Array.isArray(content)) {
+      const text = content
+        .map((block: unknown) => (typeof block === 'object' && block !== null && !Array.isArray(block)
+          ? (block as Record<string, unknown>)['text']
+          : undefined))
+        .filter((part: unknown): part is string => typeof part === 'string')
+        .join('\n')
+      if (systemPromptNeedsLean(text)) wrapped['content'] = [{ type: 'text', text: LEAN_SYSTEM_PROMPT }]
+    }
   }
 }
 

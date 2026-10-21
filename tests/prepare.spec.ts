@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { classifyUpstreamError, prepareChatBody, prepareCnChatBody, prepareInternationalChatBody, regionOf } from '../src/upstream.ts'
+import {
+  AGENT_SYSTEM_PROMPT_PATTERN,
+  classifyUpstreamError,
+  LEAN_SYSTEM_PROMPT,
+  prepareChatBody,
+  prepareCnChatBody,
+  prepareInternationalChatBody,
+  regionOf,
+} from '../src/upstream.ts'
 
 describe('prepareChatBody', () => {
   it('forces stream true', () => {
@@ -73,6 +81,73 @@ describe('prepareChatBody', () => {
     const roles = body['messages'].map((message: { role: string }) => message.role)
     expect(roles).toEqual(['system', 'user'])
     expect(body['reasoning_effort']).toBe('max')
+  })
+})
+
+describe('prepareChatBody system-prompt lean rewrite', () => {
+  const harnessPrompt
+    = 'You are an AI agent powered by DeepSeek Harness. Follow the user\'s instructions and use the tools provided to complete software engineering tasks.'
+
+  it('replaces an agent-identity developer prompt with the lean prompt', () => {
+    const body = JSON.parse(prepareChatBody(JSON.stringify({
+      messages: [
+        { role: 'developer', content: harnessPrompt },
+        { role: 'user', content: 'hi' },
+      ],
+    })))
+    expect(body['messages'][0]).toEqual({ role: 'system', content: LEAN_SYSTEM_PROMPT })
+  })
+
+  it('replaces an oversized system prompt even without identity markers', () => {
+    const body = JSON.parse(prepareChatBody(JSON.stringify({
+      messages: [
+        { role: 'system', content: 'x'.repeat(2001) },
+        { role: 'user', content: 'hi' },
+      ],
+    })))
+    expect(body['messages'][0]['content']).toBe(LEAN_SYSTEM_PROMPT)
+  })
+
+  it('keeps a short benign system prompt untouched', () => {
+    const body = JSON.parse(prepareChatBody(JSON.stringify({
+      messages: [
+        { role: 'system', content: 'Answer in Chinese.' },
+        { role: 'user', content: 'hi' },
+      ],
+    })))
+    expect(body['messages'][0]['content']).toBe('Answer in Chinese.')
+  })
+
+  it('preserves the typed-block content shape on replacement', () => {
+    const body = JSON.parse(prepareChatBody(JSON.stringify({
+      messages: [
+        { role: 'system', content: [{ type: 'text', text: harnessPrompt }] },
+        { role: 'user', content: 'hi' },
+      ],
+    })))
+    expect(body['messages'][0]['content']).toEqual([{ type: 'text', text: LEAN_SYSTEM_PROMPT }])
+  })
+
+  it('leaves non-system messages untouched', () => {
+    const body = JSON.parse(prepareChatBody(JSON.stringify({
+      messages: [{ role: 'user', content: harnessPrompt }],
+    })))
+    expect(body['messages'][0]['content']).toBe(harnessPrompt)
+  })
+
+  it('the lean prompt itself is clean and short', () => {
+    expect(LEAN_SYSTEM_PROMPT.length).toBeLessThan(2000)
+    expect(AGENT_SYSTEM_PROMPT_PATTERN.test(LEAN_SYSTEM_PROMPT)).toBe(false)
+  })
+
+  it('sanitizes the harness prompt on the international path too', () => {
+    const body = JSON.parse(prepareInternationalChatBody(JSON.stringify({
+      messages: [
+        { role: 'developer', content: harnessPrompt },
+        { role: 'user', content: 'hi' },
+      ],
+    })))
+    expect(body['messages'][0]).toEqual({ role: 'system', content: LEAN_SYSTEM_PROMPT })
   })
 })
 
