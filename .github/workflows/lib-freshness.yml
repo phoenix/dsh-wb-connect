@@ -1,0 +1,27 @@
+name: lib-freshness
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      - name: lib/ must be committed fresh
+        run: |
+          if ! git diff --exit-code -- lib/; then
+            echo '::error::lib/ 与 src/ 不同步：构建产物未随源码提交。git 直装（github: 依赖）不跑 prepack，lib 必须随源码提交——pnpm check 后 git add lib/ 一并提交。'
+            exit 1
+          fi
