@@ -57,6 +57,13 @@ describe('chatStream identity', () => {
     expect(headers['X-IDE-Name']).toBe('WorkBuddy')
     expect(headers['X-IDE-Version']).toBe(IDENTITY.clientVersion)
     expect(headers['X-Product']).toBe('SaaS')
+    // 使用端归属：WorkBuddy 自己的客户端每次 chat 都带这两项。
+    expect(headers['X-Agent-Purpose']).toBe('conversation')
+    expect(headers['X-Agent-Intent']).toBe('craft')
+    // CN build 的官方客户端不发 X-Agent-Type。
+    expect(headers['X-Agent-Type']).toBeUndefined()
+    // X-Request-ID 与消息 id 同一个值。
+    expect(headers['X-Request-ID']).toBe(headers['X-Conversation-Message-ID'])
     // The shared family stays exactly as before the identity change.
     expect(headers['X-Requested-With']).toBe('XMLHttpRequest')
     expect(headers['Origin']).toBe('https://www.codebuddy.cn')
@@ -80,6 +87,10 @@ describe('chatStream identity', () => {
     expect(headers['X-IDE-Name']).toBe('WorkBuddy')
     expect(headers['X-IDE-Version']).toBe(IDENTITY.clientVersion)
     expect(headers['X-Product']).toBe('SaaS')
+    // 国际版（WorkBuddy AI）的官方客户端额外带 X-Agent-Type。
+    expect(headers['X-Agent-Type']).toBe('main')
+    expect(headers['X-Agent-Purpose']).toBe('conversation')
+    expect(headers['X-Agent-Intent']).toBe('craft')
     const body = JSON.parse(init.body as string) as { messages: { role: string }[] }
     expect(body.messages[0]?.role).toBe('system')
     expect(body.messages[1]?.role).toBe('user')

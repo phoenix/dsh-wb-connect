@@ -454,10 +454,14 @@ function commonHeaders(credential: WorkBuddyCredential): Record<string, string> 
  * and without), so both regions carry it and the two paths cannot drift.
  */
 function conversationHeaders(): Record<string, string> {
+  const messageId = randomUUID()
   return {
     'X-Conversation-ID': randomUUID(),
     'X-Conversation-Request-ID': randomUUID(),
-    'X-Conversation-Message-ID': randomUUID(),
+    'X-Conversation-Message-ID': messageId,
+    // 上游把这两项当作同一个 id 读（WorkBuddy 客户端与 magpie 的 attend 都
+    // 发同一个值），缺 X-Request-ID 时网关的日志与追踪对不上这条消息。
+    'X-Request-ID': messageId,
   }
 }
 
@@ -470,7 +474,12 @@ function conversationHeaders(): Record<string, string> {
  * `X-Conversation-*` trio rides along too — see {@link conversationHeaders} —
  * because the international gateway rejects a chat that omits it.
  */
-function chatHeaders(credential: WorkBuddyCredential, userAgent: string, clientVersion: string): Record<string, string> {
+function chatHeaders(
+  credential: WorkBuddyCredential,
+  userAgent: string,
+  clientVersion: string,
+  region: WorkBuddyRegion,
+): Record<string, string> {
   const headers: Record<string, string> = {
     ...commonHeaders(credential),
     'User-Agent': userAgent,
@@ -485,6 +494,14 @@ function chatHeaders(credential: WorkBuddyCredential, userAgent: string, clientV
     'X-IDE-Name': 'WorkBuddy',
     'X-IDE-Version': clientVersion,
     'X-Product': 'SaaS',
+    // 使用端归属。WorkBuddy 自己的客户端每次 chat 都带这两项，缺了用量页的
+    // 「使用端」会算在「无客户端」名下（application-manifest.js 的取值，magpie
+    // 在 CN 与 AI 两个 build 上都实测过）。不参与渠道校验，只影响归属统计。
+    'X-Agent-Purpose': 'conversation',
+    'X-Agent-Intent': 'craft',
+    // 仅国际版（WorkBuddy AI）带这一项：magpie 只对 site.ai 设置，CN build
+    // 的官方客户端不发。
+    ...region === 'global' ? { 'X-Agent-Type': 'main' } : {},
     ...conversationHeaders(),
   }
   return headers
@@ -958,7 +975,7 @@ export class WorkBuddyUpstreamClient {
     try {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
-        headers: { ...chatHeaders(credential, userAgent, identity.clientVersion), 'Authorization': `Bearer ${credential.accessToken}` },
+        headers: { ...chatHeaders(credential, userAgent, identity.clientVersion, region), 'Authorization': `Bearer ${credential.accessToken}` },
         body: region === 'global' ? prepareInternationalChatBody(bodyJson) : prepareCnChatBody(bodyJson),
         ...signal === undefined ? {} : { signal },
       })
@@ -1352,7 +1369,7 @@ export class WorkBuddyUpstreamClient {
     try {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
-        headers: { ...chatHeaders(credential, userAgent, identity.clientVersion), 'Authorization': `Bearer ${credential.accessToken}` },
+        headers: { ...chatHeaders(credential, userAgent, identity.clientVersion, international ? 'global' : 'cn'), 'Authorization': `Bearer ${credential.accessToken}` },
         body: JSON.stringify(payload),
         signal,
       })
