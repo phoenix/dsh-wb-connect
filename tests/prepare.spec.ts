@@ -84,58 +84,31 @@ describe('prepareChatBody', () => {
   })
 })
 
-describe('prepareChatBody harness-identity rewrite', () => {
-  const HARNESS_IDENTITY = 'You are an AI agent powered by DeepSeek Harness.'
-  const CODEBUDDY_IDENTITY = 'You are CodeBuddy Code.'
+describe('prepareChatBody system-prompt lean rewrite', () => {
+  const harnessPrompt
+    = 'You are an AI agent powered by DeepSeek Harness. Follow the user\'s instructions and use the tools provided to complete software engineering tasks.'
 
-  // The real DSH preamble is ~9.6 kB (measured from a session log) and every
-  // byte of it except the identity sentence is steering the model legitimately
-  // needs: tool policy, sub-agent rules, file-link conventions. Replacing the
-  // whole message threw all of that away, so these tests pin the *surgical*
-  // behaviour: swap the identity, keep everything else.
-  const realPreamble = [
-    HARNESS_IDENTITY,
-    '',
-    'You are a coding agent powered by the deepseek-v4.1-flash model.',
-    '',
-    'Use the read tool — not shell commands like cat — to inspect text files.',
-    '',
-    'Non-zero exits are reported as `[exit code: N]` markers; investigate failures before moving on.',
-  ].join('\n')
-
-  it('swaps only the identity sentence and keeps the rest of the preamble', () => {
+  it('replaces an agent-identity developer prompt with the lean prompt', () => {
     const body = JSON.parse(prepareChatBody(JSON.stringify({
       messages: [
-        { role: 'developer', content: realPreamble },
+        { role: 'developer', content: harnessPrompt },
         { role: 'user', content: 'hi' },
       ],
     })))
-    const sent: string = body['messages'][0]['content']
-    expect(sent.startsWith(CODEBUDDY_IDENTITY)).toBe(true)
-    expect(sent).not.toContain('DeepSeek Harness')
-    // Everything after the identity line survives byte-for-byte.
-    expect(sent.slice(CODEBUDDY_IDENTITY.length)).toBe(realPreamble.slice(HARNESS_IDENTITY.length))
+    expect(body['messages'][0]).toEqual({ role: 'system', content: LEAN_SYSTEM_PROMPT })
   })
 
-  it('keeps a long prompt intact instead of discarding it for its length', () => {
-    const long = `${HARNESS_IDENTITY}\n\n${'x'.repeat(20_000)}`
+  it('replaces an oversized system prompt even without identity markers', () => {
     const body = JSON.parse(prepareChatBody(JSON.stringify({
-      messages: [{ role: 'system', content: long }],
+      messages: [
+        { role: 'system', content: 'x'.repeat(2001) },
+        { role: 'user', content: 'hi' },
+      ],
     })))
-    const sent: string = body['messages'][0]['content']
-    expect(sent.startsWith(CODEBUDDY_IDENTITY)).toBe(true)
-    expect(sent.length).toBe(long.length - HARNESS_IDENTITY.length + CODEBUDDY_IDENTITY.length)
+    expect(body['messages'][0]['content']).toBe(LEAN_SYSTEM_PROMPT)
   })
 
-  it('rewrites the identity in place, wherever it sits in the text', () => {
-    const body = JSON.parse(prepareChatBody(JSON.stringify({
-      messages: [{ role: 'system', content: `# Header\n\n${HARNESS_IDENTITY}\n\ntrailing policy` }],
-    })))
-    expect(body['messages'][0]['content'])
-      .toBe(`# Header\n\n${CODEBUDDY_IDENTITY}\n\ntrailing policy`)
-  })
-
-  it('leaves a prompt without the harness identity untouched', () => {
+  it('keeps a short benign system prompt untouched', () => {
     const body = JSON.parse(prepareChatBody(JSON.stringify({
       messages: [
         { role: 'system', content: 'Answer in Chinese.' },
@@ -145,54 +118,36 @@ describe('prepareChatBody harness-identity rewrite', () => {
     expect(body['messages'][0]['content']).toBe('Answer in Chinese.')
   })
 
-  it('preserves the typed-block content shape', () => {
+  it('preserves the typed-block content shape on replacement', () => {
     const body = JSON.parse(prepareChatBody(JSON.stringify({
       messages: [
-        { role: 'system', content: [{ type: 'text', text: realPreamble }] },
+        { role: 'system', content: [{ type: 'text', text: harnessPrompt }] },
         { role: 'user', content: 'hi' },
       ],
     })))
-    const blocks = body['messages'][0]['content']
-    expect(Array.isArray(blocks)).toBe(true)
-    expect(blocks[0]['type']).toBe('text')
-    expect(blocks[0]['text'].startsWith(CODEBUDDY_IDENTITY)).toBe(true)
+    expect(body['messages'][0]['content']).toEqual([{ type: 'text', text: LEAN_SYSTEM_PROMPT }])
   })
 
   it('leaves non-system messages untouched', () => {
     const body = JSON.parse(prepareChatBody(JSON.stringify({
-      messages: [{ role: 'user', content: realPreamble }],
+      messages: [{ role: 'user', content: harnessPrompt }],
     })))
-    expect(body['messages'][0]['content']).toBe(realPreamble)
+    expect(body['messages'][0]['content']).toBe(harnessPrompt)
   })
 
-  it('degrades to a lean prompt when no identity sentence is present', () => {
-    // A third-party harness may name itself differently. Without a recognised
-    // identity the gateway still sees an unknown preamble, so the lean prompt
-    // remains the fallback there — but only there.
-    const alien = 'You are an AI coding agent built by some other vendor.'
-    const body = JSON.parse(prepareChatBody(JSON.stringify({
-      messages: [{ role: 'system', content: alien }],
-    })))
-    expect(body['messages'][0]['content']).toBe(LEAN_SYSTEM_PROMPT)
-  })
-
-  it('the lean fallback carries no harness identity and stays short', () => {
+  it('the lean prompt itself is clean and short', () => {
     expect(LEAN_SYSTEM_PROMPT.length).toBeLessThan(2000)
-    expect(LEAN_SYSTEM_PROMPT).not.toContain('DeepSeek Harness')
     expect(AGENT_SYSTEM_PROMPT_PATTERN.test(LEAN_SYSTEM_PROMPT)).toBe(false)
-    expect(LEAN_SYSTEM_PROMPT.startsWith(CODEBUDDY_IDENTITY)).toBe(true)
   })
 
   it('sanitizes the harness prompt on the international path too', () => {
     const body = JSON.parse(prepareInternationalChatBody(JSON.stringify({
       messages: [
-        { role: 'developer', content: realPreamble },
+        { role: 'developer', content: harnessPrompt },
         { role: 'user', content: 'hi' },
       ],
     })))
-    const sent: string = body['messages'][0]['content']
-    expect(sent).not.toContain('DeepSeek Harness')
-    expect(sent).toContain('Use the read tool')
+    expect(body['messages'][0]).toEqual({ role: 'system', content: LEAN_SYSTEM_PROMPT })
   })
 })
 
