@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  AGENT_SYSTEM_PROMPT_PATTERN,
   classifyUpstreamError,
-  LEAN_SYSTEM_PROMPT,
+  PLACEHOLDER_SYSTEM_PROMPT,
   prepareChatBody,
   prepareCnChatBody,
   prepareInternationalChatBody,
@@ -84,70 +83,117 @@ describe('prepareChatBody', () => {
   })
 })
 
-describe('prepareChatBody system-prompt lean rewrite', () => {
-  const harnessPrompt
-    = 'You are an AI agent powered by DeepSeek Harness. Follow the user\'s instructions and use the tools provided to complete software engineering tasks.'
+describe('prepareChatBody system prompt move', () => {
+  const harnessPrompt = [
+    'You are an AI agent powered by DeepSeek Harness.',
+    '',
+    'Use the read tool — not shell commands like cat — to inspect text files.',
+  ].join('\n')
+  const wrapped = (text: string): string => `<instructions>\n${text}\n</instructions>`
 
-  it('replaces an agent-identity developer prompt with the lean prompt', () => {
+  it('moves a developer prompt into the first user message', () => {
     const body = JSON.parse(prepareChatBody(JSON.stringify({
       messages: [
         { role: 'developer', content: harnessPrompt },
         { role: 'user', content: 'hi' },
       ],
     })))
-    expect(body['messages'][0]).toEqual({ role: 'system', content: LEAN_SYSTEM_PROMPT })
+    expect(body['messages'][0]).toEqual({ role: 'system', content: PLACEHOLDER_SYSTEM_PROMPT })
+    expect(body['messages'][1]).toEqual({ role: 'user', content: `${wrapped(harnessPrompt)}\n\nhi` })
   })
 
-  it('replaces an oversized system prompt even without identity markers', () => {
+  it('leaves the harness identity out of every system and assistant message', () => {
     const body = JSON.parse(prepareChatBody(JSON.stringify({
       messages: [
-        { role: 'system', content: 'x'.repeat(2001) },
+        { role: 'system', content: harnessPrompt },
+        { role: 'assistant', content: 'ok' },
         { role: 'user', content: 'hi' },
       ],
     })))
-    expect(body['messages'][0]['content']).toBe(LEAN_SYSTEM_PROMPT)
+    for (const message of body['messages']) {
+      if (message['role'] === 'user') continue
+      expect(JSON.stringify(message)).not.toContain('DeepSeek Harness')
+    }
   })
 
-  it('keeps a short benign system prompt untouched', () => {
+  it('keeps every byte of a real-size prompt', () => {
+    const long = `${harnessPrompt}\n\n${'x'.repeat(9_500)}`
+    const body = JSON.parse(prepareChatBody(JSON.stringify({
+      messages: [
+        { role: 'system', content: long },
+        { role: 'user', content: 'hi' },
+      ],
+    })))
+    expect(body['messages'][1]['content']).toContain(long)
+  })
+
+  it('prepends to an array-shaped user message and keeps its parts', () => {
+    const body = JSON.parse(prepareChatBody(JSON.stringify({
+      messages: [
+        { role: 'system', content: harnessPrompt },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: 'hi' }, { type: 'image_url', image_url: { url: 'x' } }],
+        },
+      ],
+    })))
+    const content = body['messages'][1]['content']
+    expect(content[0]).toEqual({ type: 'text', text: wrapped(harnessPrompt) })
+    expect(content[1]).toEqual({ type: 'text', text: 'hi' })
+    expect(content[2]['type']).toBe('image_url')
+  })
+
+  it('adds a user message when the chat has none', () => {
+    const body = JSON.parse(prepareChatBody(JSON.stringify({
+      messages: [
+        { role: 'system', content: harnessPrompt },
+        { role: 'assistant', content: 'hi' },
+      ],
+    })))
+    expect(body['messages'][0]).toEqual({ role: 'system', content: PLACEHOLDER_SYSTEM_PROMPT })
+    expect(body['messages'][1]).toEqual({ role: 'user', content: wrapped(harnessPrompt) })
+  })
+
+  it('turns a later system message into a user message in place', () => {
+    const body = JSON.parse(prepareChatBody(JSON.stringify({
+      messages: [
+        { role: 'system', content: harnessPrompt },
+        { role: 'user', content: 'hi' },
+        { role: 'system', content: 'Answer in Chinese.' },
+      ],
+    })))
+    expect(body['messages'][2]).toEqual({ role: 'user', content: 'Answer in Chinese.' })
+  })
+
+  it('leaves a chat without a leading system message alone', () => {
+    const body = JSON.parse(prepareChatBody(JSON.stringify({
+      messages: [{ role: 'user', content: harnessPrompt }],
+    })))
+    expect(body['messages'][0]).toEqual({ role: 'user', content: harnessPrompt })
+  })
+
+  it('leaves a short persona in the system slot', () => {
     const body = JSON.parse(prepareChatBody(JSON.stringify({
       messages: [
         { role: 'system', content: 'Answer in Chinese.' },
         { role: 'user', content: 'hi' },
       ],
     })))
-    expect(body['messages'][0]['content']).toBe('Answer in Chinese.')
+    expect(body['messages']).toEqual([
+      { role: 'system', content: 'Answer in Chinese.' },
+      { role: 'user', content: 'hi' },
+    ])
   })
 
-  it('preserves the typed-block content shape on replacement', () => {
-    const body = JSON.parse(prepareChatBody(JSON.stringify({
-      messages: [
-        { role: 'system', content: [{ type: 'text', text: harnessPrompt }] },
-        { role: 'user', content: 'hi' },
-      ],
-    })))
-    expect(body['messages'][0]['content']).toEqual([{ type: 'text', text: LEAN_SYSTEM_PROMPT }])
-  })
-
-  it('leaves non-system messages untouched', () => {
-    const body = JSON.parse(prepareChatBody(JSON.stringify({
-      messages: [{ role: 'user', content: harnessPrompt }],
-    })))
-    expect(body['messages'][0]['content']).toBe(harnessPrompt)
-  })
-
-  it('the lean prompt itself is clean and short', () => {
-    expect(LEAN_SYSTEM_PROMPT.length).toBeLessThan(2000)
-    expect(AGENT_SYSTEM_PROMPT_PATTERN.test(LEAN_SYSTEM_PROMPT)).toBe(false)
-  })
-
-  it('sanitizes the harness prompt on the international path too', () => {
+  it('moves the prompt on the international path too', () => {
     const body = JSON.parse(prepareInternationalChatBody(JSON.stringify({
       messages: [
         { role: 'developer', content: harnessPrompt },
         { role: 'user', content: 'hi' },
       ],
     })))
-    expect(body['messages'][0]).toEqual({ role: 'system', content: LEAN_SYSTEM_PROMPT })
+    expect(body['messages'][0]).toEqual({ role: 'system', content: PLACEHOLDER_SYSTEM_PROMPT })
+    expect(body['messages'][1]['content']).toContain('Use the read tool')
   })
 })
 
