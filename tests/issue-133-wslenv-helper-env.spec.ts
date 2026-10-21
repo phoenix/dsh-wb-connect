@@ -214,15 +214,17 @@ describe('#133 helper spawn wiring (spawnAt via the provider)', () => {
   })
 
   it('forwards ELECTRON_RUN_AS_NODE through WSLENV for a WSL → Windows exe spawn', async () => {
+    const parentWslenv = process.env['WSLENV']
     answer = spawn => spawn.callback(null, '')
     await expect(spawnAt('/mnt/c/Program Files/WorkBuddy/WorkBuddy.exe', () => true))
       .rejects.toThrow(/produced no payload/)
     const env = spawns[0]!.options.env
     expect(env['ELECTRON_RUN_AS_NODE']).toBe('1')
-    expect(env['WSLENV']).toBe(wslenvForwardRunAsNode(process.env['WSLENV']))
+    expect(env['WSLENV']).toBe(wslenvForwardRunAsNode(parentWslenv))
     expect(env['WSLENV']).toContain('ELECTRON_RUN_AS_NODE/w')
-    // The plugin's own process env stays clean.
-    expect(process.env['WSLENV']).toBeUndefined()
+    // The plugin's own process env stays clean — unchanged on every host,
+    // including one that itself carries an inherited WSLENV.
+    expect(process.env['WSLENV']).toBe(parentWslenv)
   })
 
   it('forwards through WSLENV for a Windows exe under a custom automount root too', async () => {
