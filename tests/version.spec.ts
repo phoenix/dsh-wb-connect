@@ -62,18 +62,21 @@ describe('package version sync', () => {
   })
 })
 
-describe('peer manifest pins the verified DSH cores', () => {
+describe('peer manifest declares the supported DSH line', () => {
   /**
    * #69's lesson: a caret on a prerelease arm (`^0.2.0-rc.1`) silently
    * admits every later rc of the same tuple — semver auto-extends support
-   * nobody verified. Since 0.7.0 the seven DSH service peers are pinned to
-   * exactly the cores this release was smoke-tested on; extending support
-   * means editing this list after a real run, not letting a caret do it.
-   * Since 0.7.7 the list was 0.2.1-rc.1 alone: 0.2.0-rc.2 cannot be
-   * smoke-tested anymore alongside it, and an untested arm is support
-   * nobody verified. This candidate targets 0.2.1-rc.2 and bundles the
-   * official atomic-write helper. Local checks do not replace Desktop
-   * acceptance testing.
+   * nobody verified. Since 0.7.0 the seven DSH service peers were pinned to
+   * exactly the cores this release was smoke-tested on.
+   *
+   * Policy reversal (this change, owner decision): DSH publishes RCs of the
+   * same line frequently, so the plugin now supports the whole 0.2.1 line —
+   * every prerelease and the release — instead of one smoke-tested core.
+   * #69's lesson is not dropped, it moved to the upper bound: the range must
+   * close the line (`<=0.2.1`, never a bare `<0.2.2`, because the gate
+   * matches with includePrerelease and would admit 0.2.2-rc.x). The full
+   * gate matrix lives in dsh-version-compat.spec.ts. Desktop acceptance
+   * testing still applies to every version the line admits.
    *
    * #74's lesson on top of it: pi-ai must NOT be a dual-arm range. An
    * in-place upgrade from a 0.6.x-era pnpm profile keeps satisfying
@@ -94,12 +97,12 @@ describe('peer manifest pins the verified DSH cores', () => {
     '@deepseek-ai/dsh-settings',
   ] as const
 
-  it('each DSH service peer is an exact, caret-free list of verified cores', () => {
+  it('each DSH service peer declares the 0.2.1 line range', () => {
     const pkg = JSON.parse(
       readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
     ) as { peerDependencies: Record<string, string> }
     for (const name of DSH_SERVICE_PEERS) {
-      expect(pkg.peerDependencies[name], `${name} missing from peerDependencies`).toBe('0.2.1-rc.2')
+      expect(pkg.peerDependencies[name], `${name} missing from peerDependencies`).toBe('>=0.2.1-0 <=0.2.1')
     }
   })
 
@@ -109,7 +112,7 @@ describe('peer manifest pins the verified DSH cores', () => {
     const pkg = JSON.parse(
       readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
     ) as { peerDependencies: Record<string, string>, devDependencies: Record<string, string> }
-    expect(pkg.devDependencies['@deepseek-ai/dsh-atomic-write']).toBe('0.2.1-rc.2')
+    expect(pkg.devDependencies['@deepseek-ai/dsh-atomic-write']).toBe('>=0.2.1-0 <=0.2.1')
     expect(pkg.peerDependencies['@deepseek-ai/dsh-atomic-write']).toBeUndefined()
   })
 
